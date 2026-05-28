@@ -22,14 +22,11 @@ private func primaryScreenHeight() -> CGFloat {
 /// AX origin (top-left corner, y downward) for a window of `size` placed at `snap`
 /// inside `v` (NS visible frame, bottom-left origin).
 ///
-/// Each snap position has a fixed anchor corner/edge that remains at the screen
-/// boundary even when `size` is clamped by a window's minimum-size constraint.
+/// Each snap position has a fixed anchor corner/edge that stays at the screen
+/// boundary even when `size` is clamped by the window's minimum-size constraint.
 private func axOrigin(snap: WindowSnap, size s: CGSize, visibleFrame v: CGRect, primaryH: CGFloat) -> CGPoint {
-    // AX y where the window's TOP edge is flush with the TOP of the visible frame
     let topAX    = primaryH - v.maxY
-    // AX y where the window's BOTTOM edge is flush with the BOTTOM of the visible frame
     let bottomAX = primaryH - (v.minY + s.height)
-    // AX x where the window's RIGHT edge is flush with the RIGHT of the visible frame
     let rightX   = v.maxX - s.width
 
     switch snap {
@@ -43,46 +40,75 @@ private func axOrigin(snap: WindowSnap, size s: CGSize, visibleFrame v: CGRect, 
     case .bottomRight: return CGPoint(x: rightX, y: bottomAX)
     case .maximize:    return CGPoint(x: v.minX, y: topAX)
     case .center:
-        // Re-center using the actual (possibly clamped) size.
-        let cx = v.minX + (v.width - s.width)  / 2
-        let ay = primaryH - v.midY - s.height / 2
-        return CGPoint(x: cx, y: ay)
+        // Re-center using the actual (possibly clamped) size so the window is
+        // truly centered for whatever dimensions it could achieve.
+        return CGPoint(x: v.minX + (v.width - s.width) / 2,
+                       y: primaryH - v.midY - s.height / 2)
     }
 }
 
 // MARK: - Front-window resolution
 
-/// Returns the window to operate on for the frontmost app.
-///
-/// If the AX-focused window is a sheet (modal dialog attached to a parent), we
-/// redirect to the app's main window so the sheet travels with it.
 private func frontWindow(for axApp: AXUIElement) -> AXUIElement? {
     var ref: CFTypeRef?
 
     if AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &ref) == .success,
        let ref {
         let win = ref as! AXUIElement
-
         var subroleRef: CFTypeRef?
         if AXUIElementCopyAttributeValue(win, kAXSubroleAttribute as CFString, &subroleRef) == .success,
            (subroleRef as? String) == "AXSheet" {
-            // Sheet has focus; operate on the owning main window instead.
             var mainRef: CFTypeRef?
             if AXUIElementCopyAttributeValue(axApp, kAXMainWindowAttribute as CFString, &mainRef) == .success,
-               let mainRef {
-                return (mainRef as! AXUIElement)
-            }
+               let mainRef { return (mainRef as! AXUIElement) }
         }
         return win
     }
 
-    // Fallback: main window attribute.
     if AXUIElementCopyAttributeValue(axApp, kAXMainWindowAttribute as CFString, &ref) == .success,
-       let ref {
-        return (ref as! AXUIElement)
-    }
+       let ref { return (ref as! AXUIElement) }
 
     return nil
+}
+
+// MARK: - Animation
+
+private var pendingAnimations: [DispatchWorkItem] = []
+
+private func easeInOut(_ t: Double) -> Double {
+    t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t
+}
+
+/// Animate the AX window from `start` to `end` over ~180 ms.
+/// Size is applied instantly first (to resolve clamping); only position is animated.
+private func animatePosition(_ axWindow: AXUIElement,
+                              from start: CGPoint, to end: CGPoint,
+                              finalSize: CGSize) {
+    pendingAnimations.forEach { $0.cancel() }
+    pendingAnimations.removeAll()
+
+    let steps = 12
+    let duration = 0.18
+
+    for i in 1...steps {
+        let t  = Double(i) / Double(steps)
+        let et = easeInOut(t)
+        var pos = CGPoint(x: start.x + (end.x - start.x) * et,
+                          y: start.y + (end.y - start.y) * et)
+        let isLast = i == steps
+        var sz = finalSize
+
+        let item = DispatchWorkItem {
+            if let pv = AXValueCreate(.cgPoint, &pos) {
+                AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, pv)
+            }
+            if isLast, let sv = AXValueCreate(.cgSize, &sz) {
+                AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
+            }
+        }
+        pendingAnimations.append(item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration * t, execute: item)
+    }
 }
 
 // MARK: - Window snapping
@@ -93,57 +119,51 @@ func snapFrontWindow(to snap: WindowSnap) {
     let axApp = AXUIElementCreateApplication(frontApp.processIdentifier)
     guard let axWindow = frontWindow(for: axApp) else { return }
 
-    // Use the window's current AX position to pick the right screen.
+    // Read current AX position before making any changes (needed for animation).
     var axPosRef: CFTypeRef?
     AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &axPosRef)
-    var axPos = CGPoint.zero
-    if let ref = axPosRef { AXValueGetValue(ref as! AXValue, .cgPoint, &axPos) }
+    var currentOrigin = CGPoint.zero
+    if let ref = axPosRef { AXValueGetValue(ref as! AXValue, .cgPoint, &currentOrigin) }
 
     let screen = NSScreen.screens.first(where: {
-        axPos.x >= $0.frame.minX && axPos.x < $0.frame.maxX
+        currentOrigin.x >= $0.frame.minX && currentOrigin.x < $0.frame.maxX
     }) ?? NSScreen.main ?? NSScreen.screens[0]
 
-    let v  = screen.visibleFrame  // NS coords, bottom-left origin, excludes menu bar/dock
+    let v  = screen.visibleFrame
     let ph = primaryScreenHeight()
 
-    // Desired size for the snap action.
     let desiredSize: CGSize = {
-        let half = CGSize(width: v.width / 2, height: v.height / 2)
         switch snap {
-        case .left, .right:       return CGSize(width: v.width / 2, height: v.height)
-        case .top, .bottom:       return CGSize(width: v.width,     height: v.height / 2)
+        case .left, .right:      return CGSize(width: v.width / 2, height: v.height)
+        case .top, .bottom:      return CGSize(width: v.width,     height: v.height / 2)
         case .topLeft, .topRight,
-             .bottomLeft, .bottomRight: return half
-        case .maximize:           return CGSize(width: v.width,     height: v.height)
-        case .center:             return CGSize(width: v.width * 0.75, height: v.height * 0.75)
+             .bottomLeft, .bottomRight:
+                                  return CGSize(width: v.width / 2, height: v.height / 2)
+        case .maximize:          return CGSize(width: v.width,     height: v.height)
+        case .center:            return CGSize(width: v.width * 0.75, height: v.height * 0.75)
         }
     }()
 
-    // 1. Apply desired size.
+    // Apply desired size instantly – this resolves any minimum-size clamping up front
+    // so the subsequent position calculation uses the dimensions the window can actually take.
     var sz = desiredSize
     if let sv = AXValueCreate(.cgSize, &sz) {
         AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
     }
 
-    // 2. Read back the actual size – may be clamped by the app's minimum-size constraint.
+    // Read back the actual size – it may be clamped by the app's minimum-size constraint.
     var sizeRef: CFTypeRef?
     AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &sizeRef)
     var actualSize = desiredSize
     if let ref = sizeRef { AXValueGetValue(ref as! AXValue, .cgSize, &actualSize) }
 
-    // 3. Compute the AX origin using the actual size so the anchor edge/corner
-    //    stays at the correct screen boundary even if the window was clamped.
-    var origin = axOrigin(snap: snap, size: actualSize, visibleFrame: v, primaryH: ph)
+    // Compute the target AX origin anchored to the correct corner/edge using the
+    // actual post-resize size. For .center this means the window is truly centered
+    // for whatever dimensions it could achieve.
+    let targetOrigin = axOrigin(snap: snap, size: actualSize, visibleFrame: v, primaryH: ph)
 
-    // 4. Apply position.
-    if let pv = AXValueCreate(.cgPoint, &origin) {
-        AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, pv)
-    }
-
-    // 5. Re-apply size – some apps adjust layout after a position change.
-    if let sv = AXValueCreate(.cgSize, &sz) {
-        AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
-    }
+    // Animate position from where the window is now to the target.
+    animatePosition(axWindow, from: currentOrigin, to: targetOrigin, finalSize: sz)
 }
 
 // MARK: - Carbon hotkey callback (C-compatible global function)
@@ -163,22 +183,24 @@ func hotkeyCallback(
         nil,
         &hkID
     )
-    switch hkID.id {
-    // Halves — ⌃⌥⌘+arrow
-    case 1:  snapFrontWindow(to: .left)
-    case 2:  snapFrontWindow(to: .right)
-    case 3:  snapFrontWindow(to: .top)
-    case 4:  snapFrontWindow(to: .bottom)
-    // Quarters — ⌃⌥⇧+arrow (clockwise from top-left: ←↑→↓)
-    case 5:  snapFrontWindow(to: .topLeft)
-    case 6:  snapFrontWindow(to: .topRight)
-    case 7:  snapFrontWindow(to: .bottomRight)
-    case 8:  snapFrontWindow(to: .bottomLeft)
-    // Other — ⌃⌥⌘+key
-    case 9:  snapFrontWindow(to: .maximize)
-    case 10: snapFrontWindow(to: .center)
-    default: break
-    }
+
+    let snap: WindowSnap? = {
+        switch hkID.id {
+        case 1:  return .left
+        case 2:  return .right
+        case 3:  return .top
+        case 4:  return .bottom
+        case 5:  return .topLeft
+        case 6:  return .topRight
+        case 7:  return .bottomRight
+        case 8:  return .bottomLeft
+        case 9:  return .maximize
+        case 10: return .center
+        default: return nil
+        }
+    }()
+
+    if let snap { snapFrontWindow(to: snap) }
     return noErr
 }
 
@@ -192,11 +214,15 @@ private func fcc(_ s: String) -> FourCharCode {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
 
+    static weak var shared: AppDelegate?
+
     var statusItem: NSStatusItem!
     var hotKeyRefs: [EventHotKeyRef] = []
     var eventHandlerRef: EventHandlerRef?
+    private var settingsController: SettingsWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppDelegate.shared = self
         NSApp.setActivationPolicy(.accessory)
         buildMenu()
         checkAccessibility()
@@ -222,18 +248,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
         addSection("Halves", items: [
-            "⌃⌥⌘← — Left",
-            "⌃⌥⌘→ — Right",
-            "⌃⌥⌘↑ — Top",
-            "⌃⌥⌘↓ — Bottom",
+            "⌃⌥⌘← — Left", "⌃⌥⌘→ — Right",
+            "⌃⌥⌘↑ — Top",  "⌃⌥⌘↓ — Bottom",
         ], to: menu)
 
         menu.addItem(.separator())
         addSection("Quarters", items: [
-            "⌃⌥⇧← — Top-Left",
-            "⌃⌥⇧↑ — Top-Right",
-            "⌃⌥⇧→ — Bottom-Right",
-            "⌃⌥⇧↓ — Bottom-Left",
+            "⌃⌥⇧← — Top-Left",    "⌃⌥⇧↑ — Top-Right",
+            "⌃⌥⇧→ — Bottom-Right", "⌃⌥⇧↓ — Bottom-Left",
         ], to: menu)
 
         menu.addItem(.separator())
@@ -244,20 +266,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Sizer", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Settings…",
+                                action: #selector(openSettings(_:)),
+                                keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "Quit Sizer",
+                                action: #selector(NSApplication.terminate(_:)),
+                                keyEquivalent: "q"))
 
         statusItem.menu = menu
     }
 
     private func addSection(_ header: String, items: [String], to menu: NSMenu) {
-        let hItem = NSMenuItem(title: header, action: nil, keyEquivalent: "")
-        hItem.isEnabled = false
-        menu.addItem(hItem)
+        let h = NSMenuItem(title: header, action: nil, keyEquivalent: "")
+        h.isEnabled = false
+        menu.addItem(h)
         for label in items {
             let item = NSMenuItem(title: "  \(label)", action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
         }
+    }
+
+    // MARK: Settings
+
+    @objc func openSettings(_ sender: Any?) {
+        if settingsController == nil {
+            let ctrl = SettingsWindowController()
+            ctrl.onHotkeysChanged = { [weak self] in self?.reloadHotkeys() }
+            ctrl.onStartRecording = { [weak self] in self?.suspendHotkeys() }
+            ctrl.onStopRecording  = { [weak self] in self?.reloadHotkeys() }
+            settingsController = ctrl
+        }
+        settingsController?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     // MARK: Accessibility
@@ -295,37 +336,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             eventKind:  UInt32(kEventHotKeyPressed)
         )
         InstallEventHandler(GetApplicationEventTarget(), hotkeyCallback, 1, &spec, nil, &eventHandlerRef)
+        reloadHotkeys()
+    }
 
-        let halves   = UInt32(controlKey | optionKey | cmdKey)
-        let quarters = UInt32(controlKey | optionKey | shiftKey)
-
-        // key codes: left=123, right=124, up=126, down=125, m=46, c=8
-        let bindings: [(mods: UInt32, key: UInt32, id: UInt32)] = [
-            // Halves
-            (halves,   123, 1),   // ⌃⌥⌘← — left
-            (halves,   124, 2),   // ⌃⌥⌘→ — right
-            (halves,   126, 3),   // ⌃⌥⌘↑ — top
-            (halves,   125, 4),   // ⌃⌥⌘↓ — bottom
-            // Quarters (clockwise from top-left)
-            (quarters, 123, 5),   // ⌃⌥⇧← — top-left
-            (quarters, 126, 6),   // ⌃⌥⇧↑ — top-right
-            (quarters, 124, 7),   // ⌃⌥⇧→ — bottom-right
-            (quarters, 125, 8),   // ⌃⌥⇧↓ — bottom-left
-            // Other
-            (halves,    46, 9),   // ⌃⌥⌘M — maximize
-            (halves,     8, 10),  // ⌃⌥⌘C — center
-        ]
-
-        for b in bindings {
-            let hkID = EventHotKeyID(signature: fcc("SIZE"), id: b.id)
+    func reloadHotkeys() {
+        suspendHotkeys()
+        for def in BindingStore.shared.definitions {
+            let hkID = EventHotKeyID(signature: fcc("SIZE"), id: def.id)
             var ref: EventHotKeyRef?
-            RegisterEventHotKey(b.key, b.mods, hkID, GetApplicationEventTarget(), 0, &ref)
+            RegisterEventHotKey(
+                BindingStore.shared.keyCode(for: def.id),
+                BindingStore.shared.modifiers(for: def.id),
+                hkID, GetApplicationEventTarget(), 0, &ref
+            )
             if let ref { hotKeyRefs.append(ref) }
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
+    func suspendHotkeys() {
         hotKeyRefs.forEach { UnregisterEventHotKey($0) }
+        hotKeyRefs.removeAll()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        suspendHotkeys()
         if let handler = eventHandlerRef { RemoveEventHandler(handler) }
     }
 }

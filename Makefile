@@ -4,7 +4,7 @@ BUILD    := build
 BUNDLE   := $(BUILD)/$(APP).app
 MACOS    := $(BUNDLE)/Contents/MacOS
 RESOURCES:= $(BUNDLE)/Contents/Resources
-SRC      := Sources/main.swift
+SRC      := $(wildcard Sources/*.swift)
 
 # --- default target ---------------------------------------------------------
 .PHONY: all
