@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>Sizer</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.sizer.app</string>
+    <key>CFBundleName</key>
+    <string>Sizer</string>
+    <key>CFBundleDisplayName</key>
+    <string>Sizer</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <!-- Run as a menubar-only app (no Dock icon) -->
+    <key>LSUIElement</key>
+    <true/>
+    <!-- Required since macOS 12 for apps that use the Accessibility API -->
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Sizer needs Accessibility access to resize and reposition windows, and to capture global keyboard shortcuts.</string>
+</dict>
+</plist>

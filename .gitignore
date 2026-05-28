@@ -1,0 +1,14 @@
+# build output
+build/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode / Swift (if ever added)
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+*.o
+*.d
