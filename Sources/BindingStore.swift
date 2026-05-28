@@ -1,6 +1,17 @@
 import Foundation
 import Carbon.HIToolbox
 
+enum AnimationSpeed: Int {
+    case off = 0, fast = 1, slow = 2
+    var duration: TimeInterval {
+        switch self {
+        case .off:  return 0
+        case .fast: return 0.06
+        case .slow: return 0.28
+        }
+    }
+}
+
 struct HotkeyDef {
     let id: UInt32
     let label: String
@@ -24,6 +35,7 @@ final class BindingStore {
         HotkeyDef(id:  8, label: "Bottom-Left Quarter",  snap: .bottomLeft,   defaultKeyCode: 125, defaultModifiers: UInt32(controlKey | optionKey | shiftKey)),
         HotkeyDef(id:  9, label: "Maximize",             snap: .maximize,     defaultKeyCode:  46, defaultModifiers: UInt32(controlKey | optionKey | cmdKey)),
         HotkeyDef(id: 10, label: "Center (75%)",         snap: .center,       defaultKeyCode:   8, defaultModifiers: UInt32(controlKey | optionKey | cmdKey)),
+        HotkeyDef(id: 11, label: "Center (50%)",         snap: .center50,     defaultKeyCode:   7, defaultModifiers: UInt32(controlKey | optionKey | cmdKey)),
     ]
 
     func keyCode(for id: UInt32) -> UInt32 {
@@ -46,5 +58,13 @@ final class BindingStore {
             UserDefaults.standard.removeObject(forKey: "hk_\($0.id)_key")
             UserDefaults.standard.removeObject(forKey: "hk_\($0.id)_mod")
         }
+    }
+
+    var animationSpeed: AnimationSpeed {
+        get {
+            guard let raw = UserDefaults.standard.object(forKey: "animationSpeed") as? Int else { return .fast }
+            return AnimationSpeed(rawValue: raw) ?? .fast
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "animationSpeed") }
     }
 }

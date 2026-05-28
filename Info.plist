@@ -16,6 +16,8 @@
     <string>1.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>Sizer</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <!-- Run as a menubar-only app (no Dock icon) -->

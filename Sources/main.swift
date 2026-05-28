@@ -9,6 +9,7 @@ enum WindowSnap {
     case topLeft, topRight, bottomLeft, bottomRight     // quarters (⌃⌥⇧+arrow)
     case maximize                                        // ⌃⌥⌘M
     case center                                          // ⌃⌥⌘C – 75% of visible frame
+    case center50                                        // ⌃⌥X  – 50% of visible frame
 }
 
 // MARK: - Coordinate helpers
@@ -40,8 +41,9 @@ private func axOrigin(snap: WindowSnap, size s: CGSize, visibleFrame v: CGRect, 
     case .bottomRight: return CGPoint(x: rightX, y: bottomAX)
     case .maximize:    return CGPoint(x: v.minX, y: topAX)
     case .center:
-        // Re-center using the actual (possibly clamped) size so the window is
-        // truly centered for whatever dimensions it could achieve.
+        return CGPoint(x: v.minX + (v.width - s.width) / 2,
+                       y: primaryH - v.midY - s.height / 2)
+    case .center50:
         return CGPoint(x: v.minX + (v.width - s.width) / 2,
                        y: primaryH - v.midY - s.height / 2)
     }
@@ -79,36 +81,71 @@ private func easeInOut(_ t: Double) -> Double {
     t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t
 }
 
-/// Animate the AX window from `start` to `end` over ~180 ms.
-/// Size is applied instantly first (to resolve clamping); only position is animated.
-private func animatePosition(_ axWindow: AXUIElement,
-                              from start: CGPoint, to end: CGPoint,
-                              finalSize: CGSize) {
+/// Animate size and position simultaneously to the snap target.
+/// On the final frame, corrects position if the window clamped to a minimum size.
+private func animateSnap(_ axWindow: AXUIElement,
+                          startSize: CGSize, endSize: CGSize,
+                          snap: WindowSnap, visibleFrame v: CGRect, primaryH: CGFloat,
+                          currentPos: CGPoint) {
     pendingAnimations.forEach { $0.cancel() }
     pendingAnimations.removeAll()
 
+    let duration = BindingStore.shared.animationSpeed.duration
+
+    if duration == 0 {
+        var sz = endSize
+        if let sv = AXValueCreate(.cgSize, &sz) {
+            AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
+        }
+        var actualSzRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &actualSzRef)
+        var actualSize = endSize
+        if let r = actualSzRef { AXValueGetValue(r as! AXValue, .cgSize, &actualSize) }
+        let targetPos = axOrigin(snap: snap, size: actualSize, visibleFrame: v, primaryH: primaryH)
+        var pos = targetPos
+        if let pv = AXValueCreate(.cgPoint, &pos) {
+            AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, pv)
+        }
+        return
+    }
+
+    let targetPos = axOrigin(snap: snap, size: endSize, visibleFrame: v, primaryH: primaryH)
     let steps = 12
-    let duration = 0.18
 
     for i in 1...steps {
-        let t  = Double(i) / Double(steps)
-        let et = easeInOut(t)
-        var pos = CGPoint(x: start.x + (end.x - start.x) * et,
-                          y: start.y + (end.y - start.y) * et)
-        let isLast = i == steps
-        var sz = finalSize
+        let t  = easeInOut(Double(i) / Double(steps))
+        var sz = CGSize(width:  startSize.width  + (endSize.width  - startSize.width)  * t,
+                        height: startSize.height + (endSize.height - startSize.height) * t)
+        var pos = CGPoint(x: currentPos.x + (targetPos.x - currentPos.x) * t,
+                          y: currentPos.y + (targetPos.y - currentPos.y) * t)
 
         let item = DispatchWorkItem {
+            if let sv = AXValueCreate(.cgSize, &sz) {
+                AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
+            }
             if let pv = AXValueCreate(.cgPoint, &pos) {
                 AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, pv)
-            }
-            if isLast, let sv = AXValueCreate(.cgSize, &sz) {
-                AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
             }
         }
         pendingAnimations.append(item)
         DispatchQueue.main.asyncAfter(deadline: .now() + duration * t, execute: item)
     }
+
+    // After the animation settles, re-read the actual size. If the window clamped to a
+    // minimum size, reposition so the anchor edge stays flush.
+    let correction = DispatchWorkItem {
+        var actualSzRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &actualSzRef)
+        var actualSize = endSize
+        if let r = actualSzRef { AXValueGetValue(r as! AXValue, .cgSize, &actualSize) }
+        guard actualSize.width != endSize.width || actualSize.height != endSize.height else { return }
+        var correctedPos = axOrigin(snap: snap, size: actualSize, visibleFrame: v, primaryH: primaryH)
+        if let pv = AXValueCreate(.cgPoint, &correctedPos) {
+            AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, pv)
+        }
+    }
+    pendingAnimations.append(correction)
+    DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.1, execute: correction)
 }
 
 // MARK: - Window snapping
@@ -120,13 +157,13 @@ func snapFrontWindow(to snap: WindowSnap) {
     guard let axWindow = frontWindow(for: axApp) else { return }
 
     // Determine the screen from the window's current position.
-    var axPosRef0: CFTypeRef?
-    AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &axPosRef0)
-    var prePos = CGPoint.zero
-    if let ref = axPosRef0 { AXValueGetValue(ref as! AXValue, .cgPoint, &prePos) }
+    var axPosRef: CFTypeRef?
+    AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &axPosRef)
+    var currentPos = CGPoint.zero
+    if let ref = axPosRef { AXValueGetValue(ref as! AXValue, .cgPoint, &currentPos) }
 
     let screen = NSScreen.screens.first(where: {
-        prePos.x >= $0.frame.minX && prePos.x < $0.frame.maxX
+        currentPos.x >= $0.frame.minX && currentPos.x < $0.frame.maxX
     }) ?? NSScreen.main ?? NSScreen.screens[0]
 
     let v  = screen.visibleFrame
@@ -141,35 +178,25 @@ func snapFrontWindow(to snap: WindowSnap) {
                                   return CGSize(width: v.width / 2, height: v.height / 2)
         case .maximize:          return CGSize(width: v.width,     height: v.height)
         case .center:            return CGSize(width: v.width * 0.75, height: v.height * 0.75)
+        case .center50:          return CGSize(width: v.width * 0.50, height: v.height * 0.50)
         }
     }()
 
-    // Apply desired size instantly – resolves minimum-size clamping before position math.
-    var sz = desiredSize
-    if let sv = AXValueCreate(.cgSize, &sz) {
-        AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
+    // Read current size as the starting point for the resize animation.
+    var currentSizeRef: CFTypeRef?
+    AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &currentSizeRef)
+    var currentSize = desiredSize
+    if let ref = currentSizeRef { AXValueGetValue(ref as! AXValue, .cgSize, &currentSize) }
+
+    let effectiveEndSize: CGSize
+    if abs(currentSize.width - desiredSize.width) <= 2 && abs(currentSize.height - desiredSize.height) <= 2 {
+        effectiveEndSize = currentSize
+    } else {
+        effectiveEndSize = desiredSize
     }
 
-    // Read back the actual size (may be clamped by the app's minimum-size constraint).
-    var sizeRef: CFTypeRef?
-    AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &sizeRef)
-    var actualSize = desiredSize
-    if let ref = sizeRef { AXValueGetValue(ref as! AXValue, .cgSize, &actualSize) }
-
-    // Read the position *after* the size change — some apps shift the window origin
-    // when resized, so animating from the post-resize position avoids a visual jump.
-    var axPosRef: CFTypeRef?
-    AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &axPosRef)
-    var currentOrigin = CGPoint.zero
-    if let ref = axPosRef { AXValueGetValue(ref as! AXValue, .cgPoint, &currentOrigin) }
-
-    // Compute the target AX origin anchored to the correct corner/edge using the
-    // actual post-resize size. For .center this means the window is truly centered
-    // for whatever dimensions it could achieve.
-    let targetOrigin = axOrigin(snap: snap, size: actualSize, visibleFrame: v, primaryH: ph)
-
-    // Animate position from where the window is now to the target.
-    animatePosition(axWindow, from: currentOrigin, to: targetOrigin, finalSize: sz)
+    animateSnap(axWindow, startSize: currentSize, endSize: effectiveEndSize,
+                snap: snap, visibleFrame: v, primaryH: ph, currentPos: currentPos)
 }
 
 // MARK: - Carbon hotkey callback (C-compatible global function)
@@ -202,11 +229,19 @@ func hotkeyCallback(
         case 8:  return .bottomLeft
         case 9:  return .maximize
         case 10: return .center
+        case 11: return .center50
         default: return nil
         }
     }()
 
-    if let snap { snapFrontWindow(to: snap) }
+    if let snap {
+        DispatchQueue.main.async { AppDelegate.shared?.pulseIcon() }
+        if AXIsProcessTrusted() {
+            snapFrontWindow(to: snap)
+        } else {
+            AppDelegate.shared?.checkAccessibility()
+        }
+    }
     return noErr
 }
 
@@ -227,7 +262,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var eventHandlerRef: EventHandlerRef?
     private var settingsController: SettingsWindowController?
 
-    private var isEnabled: Bool = UserDefaults.standard.object(forKey: "sizerEnabled") as? Bool ?? true
+    private(set) var isEnabled: Bool = UserDefaults.standard.object(forKey: "sizerEnabled") as? Bool ?? true
     private weak var toggleMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -261,29 +296,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         toggleMenuItem = toggle
         menu.addItem(toggle)
 
-        menu.addItem(.separator())
-        addSection("Halves", items: [
-            "⌃⌥⌘← — Left", "⌃⌥⌘→ — Right",
-            "⌃⌥⌘↑ — Top",  "⌃⌥⌘↓ — Bottom",
-        ], to: menu)
-
-        menu.addItem(.separator())
-        addSection("Quarters", items: [
-            "⌃⌥⇧← — Top-Left",    "⌃⌥⇧↑ — Top-Right",
-            "⌃⌥⇧→ — Bottom-Right", "⌃⌥⇧↓ — Bottom-Left",
-        ], to: menu)
-
-        menu.addItem(.separator())
-        for label in ["⌃⌥⌘M — Maximize", "⌃⌥⌘C — Center (75%)"] {
-            let item = NSMenuItem(title: label, action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
+        for group in [[1,2,3,4], [5,6,7,8], [9,10,11]] {
+            menu.addItem(.separator())
+            for id in group {
+                guard let def = BindingStore.shared.definitions.first(where: { $0.id == UInt32(id) }) else { continue }
+                let shortcut = formatShortcut(
+                    keyCode:   BindingStore.shared.keyCode(for: def.id),
+                    modifiers: BindingStore.shared.modifiers(for: def.id)
+                )
+                let item = NSMenuItem(title: "\(def.label)\t\(shortcut)",
+                                      action: #selector(menuSnapAction(_:)),
+                                      keyEquivalent: "")
+                item.tag = Int(def.id)
+                menu.addItem(item)
+            }
         }
 
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Settings…",
-                                action: #selector(openSettings(_:)),
-                                keyEquivalent: ","))
+        let settingsItem = NSMenuItem(title: "Settings…",
+                                      action: #selector(openSettings(_:)),
+                                      keyEquivalent: ",")
+        settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+        menu.addItem(settingsItem)
         menu.addItem(NSMenuItem(title: "Quit Sizer",
                                 action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
@@ -291,15 +325,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    private func addSection(_ header: String, items: [String], to menu: NSMenu) {
-        let h = NSMenuItem(title: header, action: nil, keyEquivalent: "")
-        h.isEnabled = false
-        menu.addItem(h)
-        for label in items {
-            let item = NSMenuItem(title: "  \(label)", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
-        }
+    @objc func menuSnapAction(_ sender: NSMenuItem) {
+        guard let def = BindingStore.shared.definitions.first(where: { $0.id == UInt32(sender.tag) }) else { return }
+        snapFrontWindow(to: def.snap)
     }
 
     // MARK: Toggle
@@ -314,6 +342,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyIconState() {
         statusItem.button?.alphaValue = isEnabled ? 1.0 : 0.5
+    }
+
+    func pulseIcon() {
+        statusItem.button?.alphaValue = 0.25
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            self?.applyIconState()
+        }
     }
 
     // MARK: Settings
@@ -332,7 +367,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Accessibility
 
-    private func checkAccessibility() {
+    func checkAccessibility() {
         let opts = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary
         guard !AXIsProcessTrustedWithOptions(opts) else { return }
 
@@ -397,14 +432,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Status bar icon
 
 /// Draws an "S" with four outward-pointing arrowheads as a template image.
-private func makeSizerIcon() -> NSImage {
-    let dim: CGFloat = 18
+func makeSizerIcon(dim: CGFloat = 18) -> NSImage {
     let img = NSImage(size: NSSize(width: dim, height: dim), flipped: false) { _ in
         guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
 
-        // "S" centred in the icon
+        let s = dim / 18   // scale factor relative to the original 18 pt grid
+
         let attrs: [NSAttributedString.Key: Any] = [
-            .font:            NSFont.boldSystemFont(ofSize: 10),
+            .font:            NSFont.boldSystemFont(ofSize: 10 * s),
             .foregroundColor: NSColor.black,
         ]
         let str = "S" as NSString
@@ -412,7 +447,6 @@ private func makeSizerIcon() -> NSImage {
         str.draw(at: CGPoint(x: (dim - sz.width) / 2, y: (dim - sz.height) / 2),
                  withAttributes: attrs)
 
-        // Solid arrowhead helper
         func arrow(tip: CGPoint, l: CGPoint, r: CGPoint) {
             ctx.beginPath(); ctx.move(to: tip)
             ctx.addLine(to: l); ctx.addLine(to: r)
@@ -421,10 +455,10 @@ private func makeSizerIcon() -> NSImage {
 
         ctx.setFillColor(NSColor.black.cgColor)
         let m = dim / 2
-        arrow(tip: CGPoint(x: m,       y: dim - 1), l: CGPoint(x: m - 2.5, y: dim - 4.5), r: CGPoint(x: m + 2.5, y: dim - 4.5)) // ▲
-        arrow(tip: CGPoint(x: m,       y: 1),       l: CGPoint(x: m - 2.5, y: 4.5),       r: CGPoint(x: m + 2.5, y: 4.5))       // ▼
-        arrow(tip: CGPoint(x: 1,       y: m),       l: CGPoint(x: 4.5,     y: m - 2.5),   r: CGPoint(x: 4.5,     y: m + 2.5))   // ◀
-        arrow(tip: CGPoint(x: dim - 1, y: m),       l: CGPoint(x: dim-4.5, y: m - 2.5),   r: CGPoint(x: dim-4.5, y: m + 2.5))   // ▶
+        arrow(tip: CGPoint(x: m,         y: dim - 1*s), l: CGPoint(x: m - 2.5*s, y: dim - 4.5*s), r: CGPoint(x: m + 2.5*s, y: dim - 4.5*s)) // ▲
+        arrow(tip: CGPoint(x: m,         y: 1*s),       l: CGPoint(x: m - 2.5*s, y: 4.5*s),       r: CGPoint(x: m + 2.5*s, y: 4.5*s))       // ▼
+        arrow(tip: CGPoint(x: 1*s,       y: m),         l: CGPoint(x: 4.5*s,     y: m - 2.5*s),   r: CGPoint(x: 4.5*s,     y: m + 2.5*s))   // ◀
+        arrow(tip: CGPoint(x: dim - 1*s, y: m),         l: CGPoint(x: dim-4.5*s, y: m - 2.5*s),   r: CGPoint(x: dim-4.5*s, y: m + 2.5*s))   // ▶
         return true
     }
     img.isTemplate = true

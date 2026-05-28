@@ -3,7 +3,6 @@ import Carbon.HIToolbox
 
 // MARK: - Shortcut formatting
 
-// Hardware key-code → display string (US QWERTY layout)
 let keyNames: [UInt32: String] = [
     // Arrows
     123: "←", 124: "→", 125: "↓", 126: "↑",
@@ -31,6 +30,38 @@ func formatShortcut(keyCode: UInt32, modifiers: UInt32) -> String {
     return m + (keyNames[keyCode] ?? "(\(keyCode))")
 }
 
+// MARK: - Toggle switch
+
+final class ToggleSwitch: NSControl {
+
+    var isOn: Bool = false { didSet { needsDisplay = true } }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 44, height: 24) }
+
+    override func mouseDown(with event: NSEvent) {
+        isOn.toggle()
+        sendAction(action, to: target)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let track = bounds.insetBy(dx: 1, dy: 1)
+        let r = track.height / 2
+        (isOn ? NSColor.controlAccentColor : NSColor(white: 0.65, alpha: 1)).setFill()
+        NSBezierPath(roundedRect: track, xRadius: r, yRadius: r).fill()
+
+        let pad: CGFloat = 2
+        let td = track.height - pad * 2
+        let tx = isOn ? track.maxX - td - pad : track.minX + pad
+        NSColor.white.setFill()
+        NSBezierPath(ovalIn: NSRect(x: tx, y: track.minY + pad, width: td, height: td)).fill()
+    }
+}
+
+private class NonClickableHeaderView: NSTableHeaderView {
+    override func mouseDown(with event: NSEvent) {}
+    override func mouseUp(with event: NSEvent) {}
+}
+
 // MARK: - Settings window
 
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
@@ -42,10 +73,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var tableView: NSTableView!
     private var recordingRow: Int?
     private var keyMonitor: Any?
+    private weak var enabledSwitch: ToggleSwitch?
+    private weak var axStatusLabel: NSTextField?
+    private weak var axOpenBtn: NSButton?
 
     convenience init() {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 406),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 548),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -63,6 +97,61 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private func buildUI() {
         guard let cv = window?.contentView else { return }
 
+        // Header: icon + title + enabled toggle
+
+        let iconView = NSImageView(image: makeSizerIcon(dim: 32))
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.imageScaling = .scaleNone
+        cv.addSubview(iconView)
+
+        let titleLabel = NSTextField(labelWithString: "Sizer")
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = .boldSystemFont(ofSize: 15)
+        cv.addSubview(titleLabel)
+
+        let enabledLabel = NSTextField(labelWithString: "Enabled")
+        enabledLabel.translatesAutoresizingMaskIntoConstraints = false
+        enabledLabel.font = .systemFont(ofSize: 13)
+        cv.addSubview(enabledLabel)
+
+        let sw = ToggleSwitch()
+        sw.translatesAutoresizingMaskIntoConstraints = false
+        sw.isOn = AppDelegate.shared?.isEnabled ?? true
+        sw.target = self
+        sw.action = #selector(enabledToggled)
+        cv.addSubview(sw)
+        enabledSwitch = sw
+
+        let divider1 = NSBox()
+        divider1.translatesAutoresizingMaskIntoConstraints = false
+        divider1.boxType = .separator
+        cv.addSubview(divider1)
+
+        // Accessibility status banner
+
+        let axLabel = NSTextField(labelWithString: "")
+        axLabel.translatesAutoresizingMaskIntoConstraints = false
+        axLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        axLabel.maximumNumberOfLines = 0
+        axLabel.lineBreakMode = .byWordWrapping
+        cv.addSubview(axLabel)
+        axStatusLabel = axLabel
+
+        let axBtn = NSButton(title: "Open Settings", target: self,
+                             action: #selector(openAccessibilitySettings))
+        axBtn.translatesAutoresizingMaskIntoConstraints = false
+        axBtn.bezelStyle = .rounded
+        axBtn.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        cv.addSubview(axBtn)
+        axOpenBtn = axBtn
+
+        let divider2 = NSBox()
+        divider2.translatesAutoresizingMaskIntoConstraints = false
+        divider2.boxType = .separator
+        cv.addSubview(divider2)
+
+        // Shortcut table
+
         let scroll = NSScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.hasVerticalScroller = false
@@ -79,6 +168,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         tableView.usesAlternatingRowBackgroundColors = true
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         tableView.intercellSpacing = .zero
+        tableView.headerView = NonClickableHeaderView()
 
         let c1 = NSTableColumn(identifier: .init("action"))
         c1.title = "Action"; c1.width = 200
@@ -96,6 +186,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         helpLabel.textColor = .secondaryLabelColor
         cv.addSubview(helpLabel)
 
+        let speedLabel = NSTextField(labelWithString: "Animation:")
+        speedLabel.translatesAutoresizingMaskIntoConstraints = false
+        speedLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        speedLabel.textColor = .secondaryLabelColor
+        cv.addSubview(speedLabel)
+
+        let speedControl = NSSegmentedControl(labels: ["Off", "Fast", "Slow"],
+                                              trackingMode: .selectOne,
+                                              target: self,
+                                              action: #selector(speedChanged(_:)))
+        speedControl.translatesAutoresizingMaskIntoConstraints = false
+        speedControl.selectedSegment = BindingStore.shared.animationSpeed.rawValue
+        cv.addSubview(speedControl)
+
         let resetBtn = NSButton(title: "Reset Defaults", target: self, action: #selector(resetDefaults))
         resetBtn.translatesAutoresizingMaskIntoConstraints = false
         resetBtn.bezelStyle = .rounded
@@ -108,13 +212,50 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         cv.addSubview(doneBtn)
 
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: cv.topAnchor, constant: 16),
+            iconView.topAnchor.constraint(equalTo: cv.topAnchor, constant: 14),
+            iconView.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 16),
+            iconView.widthAnchor.constraint(equalToConstant: 32),
+            iconView.heightAnchor.constraint(equalToConstant: 32),
+
+            titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8),
+            titleLabel.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
+
+            sw.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -16),
+            sw.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
+            sw.widthAnchor.constraint(equalToConstant: 44),
+            sw.heightAnchor.constraint(equalToConstant: 24),
+
+            enabledLabel.trailingAnchor.constraint(equalTo: sw.leadingAnchor, constant: -6),
+            enabledLabel.centerYAnchor.constraint(equalTo: sw.centerYAnchor),
+
+            divider1.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 12),
+            divider1.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+            divider1.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+
+            axLabel.topAnchor.constraint(equalTo: divider1.bottomAnchor, constant: 8),
+            axLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 16),
+            axLabel.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -16),
+
+            axBtn.topAnchor.constraint(equalTo: axLabel.bottomAnchor, constant: 6),
+            axBtn.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -16),
+
+            divider2.topAnchor.constraint(equalTo: axBtn.bottomAnchor, constant: 8),
+            divider2.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+            divider2.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+
+            scroll.topAnchor.constraint(equalTo: divider2.bottomAnchor, constant: 8),
             scroll.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 16),
             scroll.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -16),
             scroll.bottomAnchor.constraint(equalTo: helpLabel.topAnchor, constant: -12),
 
             helpLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 16),
-            helpLabel.bottomAnchor.constraint(equalTo: resetBtn.topAnchor, constant: -10),
+            helpLabel.bottomAnchor.constraint(equalTo: speedLabel.topAnchor, constant: -10),
+
+            speedLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 16),
+            speedLabel.centerYAnchor.constraint(equalTo: speedControl.centerYAnchor),
+
+            speedControl.leadingAnchor.constraint(equalTo: speedLabel.trailingAnchor, constant: 8),
+            speedControl.bottomAnchor.constraint(equalTo: resetBtn.topAnchor, constant: -10),
 
             resetBtn.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 16),
             resetBtn.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -16),
@@ -122,9 +263,24 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             doneBtn.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -16),
             doneBtn.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -16),
         ])
+
+        refreshAccessibilityStatus()
+    }
+
+    private func refreshAccessibilityStatus() {
+        let trusted = AXIsProcessTrusted()
+        axStatusLabel?.stringValue = trusted ? "✓ Accessibility granted" : "⚠ Accessibility not granted — remove and re-add Sizer in Settings"
+        axStatusLabel?.textColor   = trusted ? .systemGreen : .systemOrange
+        axOpenBtn?.isHidden        = trusted
     }
 
     // MARK: Window delegate
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        refreshAccessibilityStatus()
+        enabledSwitch?.isOn = AppDelegate.shared?.isEnabled ?? true
+        enabledSwitch?.needsDisplay = true
+    }
 
     func windowWillClose(_ notification: Notification) {
         stopRecording(cancelled: true)
@@ -132,11 +288,26 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: Actions
 
+    @objc private func enabledToggled() {
+        AppDelegate.shared?.toggleEnabled(nil)
+        enabledSwitch?.isOn = AppDelegate.shared?.isEnabled ?? true
+    }
+
+    @objc private func openAccessibilitySettings() {
+        NSWorkspace.shared.open(
+            URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+        )
+    }
+
     @objc private func resetDefaults() {
         stopRecording(cancelled: true)
         BindingStore.shared.resetAll()
         tableView.reloadData()
         onHotkeysChanged?()
+    }
+
+    @objc private func speedChanged(_ sender: NSSegmentedControl) {
+        BindingStore.shared.animationSpeed = AnimationSpeed(rawValue: sender.selectedSegment) ?? .fast
     }
 
     // MARK: Recording
@@ -150,14 +321,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKeyEvent(event)
-            return nil  // consume — prevents hotkeys from firing while recording
+            return nil
         }
     }
 
     private func handleKeyEvent(_ event: NSEvent) {
         guard let row = recordingRow else { return }
 
-        if event.keyCode == 53 { stopRecording(cancelled: true); return }  // Escape
+        if event.keyCode == 53 { stopRecording(cancelled: true); return }
 
         let f = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         var mods: UInt32 = 0
@@ -165,7 +336,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         if f.contains(.option)  { mods |= UInt32(optionKey)  }
         if f.contains(.shift)   { mods |= UInt32(shiftKey)   }
         if f.contains(.command) { mods |= UInt32(cmdKey)     }
-        guard mods != 0 else { return }  // require at least one modifier
+        guard mods != 0 else { return }
 
         BindingStore.shared.save(
             id: BindingStore.shared.definitions[row].id,
@@ -223,11 +394,7 @@ extension SettingsWindowController: NSTableViewDataSource, NSTableViewDelegate {
         case "shortcut":
             let cell = NSTableCellView()
             let isRec = recordingRow == row
-            let btn = NSButton(
-                title: "",
-                target: self,
-                action: #selector(shortcutTapped(_:))
-            )
+            let btn = NSButton(title: "", target: self, action: #selector(shortcutTapped(_:)))
             btn.translatesAutoresizingMaskIntoConstraints = false
             btn.tag = row
             btn.bezelStyle = .roundRect
@@ -240,9 +407,16 @@ extension SettingsWindowController: NSTableViewDataSource, NSTableViewDelegate {
                                  .font: NSFont.systemFont(ofSize: 12, weight: .light)]
                 )
             } else {
-                btn.title = formatShortcut(
+                let shortcut = formatShortcut(
                     keyCode:   BindingStore.shared.keyCode(for: def.id),
                     modifiers: BindingStore.shared.modifiers(for: def.id)
+                )
+                btn.attributedTitle = NSAttributedString(
+                    string: shortcut,
+                    attributes: [
+                        .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+                        .kern: 2.5,
+                    ]
                 )
             }
 
