@@ -119,14 +119,14 @@ func snapFrontWindow(to snap: WindowSnap) {
     let axApp = AXUIElementCreateApplication(frontApp.processIdentifier)
     guard let axWindow = frontWindow(for: axApp) else { return }
 
-    // Read current AX position before making any changes (needed for animation).
-    var axPosRef: CFTypeRef?
-    AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &axPosRef)
-    var currentOrigin = CGPoint.zero
-    if let ref = axPosRef { AXValueGetValue(ref as! AXValue, .cgPoint, &currentOrigin) }
+    // Determine the screen from the window's current position.
+    var axPosRef0: CFTypeRef?
+    AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &axPosRef0)
+    var prePos = CGPoint.zero
+    if let ref = axPosRef0 { AXValueGetValue(ref as! AXValue, .cgPoint, &prePos) }
 
     let screen = NSScreen.screens.first(where: {
-        currentOrigin.x >= $0.frame.minX && currentOrigin.x < $0.frame.maxX
+        prePos.x >= $0.frame.minX && prePos.x < $0.frame.maxX
     }) ?? NSScreen.main ?? NSScreen.screens[0]
 
     let v  = screen.visibleFrame
@@ -144,18 +144,24 @@ func snapFrontWindow(to snap: WindowSnap) {
         }
     }()
 
-    // Apply desired size instantly – this resolves any minimum-size clamping up front
-    // so the subsequent position calculation uses the dimensions the window can actually take.
+    // Apply desired size instantly – resolves minimum-size clamping before position math.
     var sz = desiredSize
     if let sv = AXValueCreate(.cgSize, &sz) {
         AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
     }
 
-    // Read back the actual size – it may be clamped by the app's minimum-size constraint.
+    // Read back the actual size (may be clamped by the app's minimum-size constraint).
     var sizeRef: CFTypeRef?
     AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &sizeRef)
     var actualSize = desiredSize
     if let ref = sizeRef { AXValueGetValue(ref as! AXValue, .cgSize, &actualSize) }
+
+    // Read the position *after* the size change — some apps shift the window origin
+    // when resized, so animating from the post-resize position avoids a visual jump.
+    var axPosRef: CFTypeRef?
+    AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &axPosRef)
+    var currentOrigin = CGPoint.zero
+    if let ref = axPosRef { AXValueGetValue(ref as! AXValue, .cgPoint, &currentOrigin) }
 
     // Compute the target AX origin anchored to the correct corner/edge using the
     // actual post-resize size. For .center this means the window is truly centered
@@ -221,6 +227,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var eventHandlerRef: EventHandlerRef?
     private var settingsController: SettingsWindowController?
 
+    private var isEnabled: Bool = UserDefaults.standard.object(forKey: "sizerEnabled") as? Bool ?? true
+    private weak var toggleMenuItem: NSMenuItem?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
         NSApp.setActivationPolicy(.accessory)
@@ -234,10 +243,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func buildMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let btn = statusItem.button {
-            let img = NSImage(systemSymbolName: "rectangle.split.2x2", accessibilityDescription: "Sizer")
-                   ?? NSImage(systemSymbolName: "macwindow", accessibilityDescription: "Sizer")
-            img?.isTemplate = true
-            btn.image = img
+            btn.image = makeSizerIcon()
+            applyIconState()
         }
 
         let menu = NSMenu()
@@ -245,6 +252,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let titleItem = NSMenuItem(title: "Sizer", action: nil, keyEquivalent: "")
         titleItem.isEnabled = false
         menu.addItem(titleItem)
+
+        menu.addItem(.separator())
+        let toggle = NSMenuItem(title: "Enabled",
+                                action: #selector(toggleEnabled(_:)),
+                                keyEquivalent: "")
+        toggle.state = isEnabled ? .on : .off
+        toggleMenuItem = toggle
+        menu.addItem(toggle)
 
         menu.addItem(.separator())
         addSection("Halves", items: [
@@ -285,6 +300,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             item.isEnabled = false
             menu.addItem(item)
         }
+    }
+
+    // MARK: Toggle
+
+    @objc func toggleEnabled(_ sender: Any?) {
+        isEnabled.toggle()
+        UserDefaults.standard.set(isEnabled, forKey: "sizerEnabled")
+        toggleMenuItem?.state = isEnabled ? .on : .off
+        applyIconState()
+        isEnabled ? reloadHotkeys() : suspendHotkeys()
+    }
+
+    private func applyIconState() {
+        statusItem.button?.alphaValue = isEnabled ? 1.0 : 0.5
     }
 
     // MARK: Settings
@@ -341,6 +370,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func reloadHotkeys() {
         suspendHotkeys()
+        guard isEnabled else { return }
         for def in BindingStore.shared.definitions {
             let hkID = EventHotKeyID(signature: fcc("SIZE"), id: def.id)
             var ref: EventHotKeyRef?
@@ -362,6 +392,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         suspendHotkeys()
         if let handler = eventHandlerRef { RemoveEventHandler(handler) }
     }
+}
+
+// MARK: - Status bar icon
+
+/// Draws an "S" with four outward-pointing arrowheads as a template image.
+private func makeSizerIcon() -> NSImage {
+    let dim: CGFloat = 18
+    let img = NSImage(size: NSSize(width: dim, height: dim), flipped: false) { _ in
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+
+        // "S" centred in the icon
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font:            NSFont.boldSystemFont(ofSize: 10),
+            .foregroundColor: NSColor.black,
+        ]
+        let str = "S" as NSString
+        let sz  = str.size(withAttributes: attrs)
+        str.draw(at: CGPoint(x: (dim - sz.width) / 2, y: (dim - sz.height) / 2),
+                 withAttributes: attrs)
+
+        // Solid arrowhead helper
+        func arrow(tip: CGPoint, l: CGPoint, r: CGPoint) {
+            ctx.beginPath(); ctx.move(to: tip)
+            ctx.addLine(to: l); ctx.addLine(to: r)
+            ctx.closePath(); ctx.fillPath()
+        }
+
+        ctx.setFillColor(NSColor.black.cgColor)
+        let m = dim / 2
+        arrow(tip: CGPoint(x: m,       y: dim - 1), l: CGPoint(x: m - 2.5, y: dim - 4.5), r: CGPoint(x: m + 2.5, y: dim - 4.5)) // ▲
+        arrow(tip: CGPoint(x: m,       y: 1),       l: CGPoint(x: m - 2.5, y: 4.5),       r: CGPoint(x: m + 2.5, y: 4.5))       // ▼
+        arrow(tip: CGPoint(x: 1,       y: m),       l: CGPoint(x: 4.5,     y: m - 2.5),   r: CGPoint(x: 4.5,     y: m + 2.5))   // ◀
+        arrow(tip: CGPoint(x: dim - 1, y: m),       l: CGPoint(x: dim-4.5, y: m - 2.5),   r: CGPoint(x: dim-4.5, y: m + 2.5))   // ▶
+        return true
+    }
+    img.isTemplate = true
+    return img
 }
 
 // MARK: - Entry point
