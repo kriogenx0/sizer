@@ -93,18 +93,26 @@ private func animateSnap(_ axWindow: AXUIElement,
     let duration = BindingStore.shared.animationSpeed.duration
 
     if duration == 0 {
+        // Position first so the window can grow without hitting the bottom/right screen edge
+        let targetPos = axOrigin(snap: snap, size: endSize, visibleFrame: v, primaryH: primaryH)
+        var pos = targetPos
+        if let pv = AXValueCreate(.cgPoint, &pos) {
+            AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, pv)
+        }
         var sz = endSize
         if let sv = AXValueCreate(.cgSize, &sz) {
             AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
         }
+        // Correct position if size was clamped to a minimum
         var actualSzRef: CFTypeRef?
         AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &actualSzRef)
         var actualSize = endSize
         if let r = actualSzRef { AXValueGetValue(r as! AXValue, .cgSize, &actualSize) }
-        let targetPos = axOrigin(snap: snap, size: actualSize, visibleFrame: v, primaryH: primaryH)
-        var pos = targetPos
-        if let pv = AXValueCreate(.cgPoint, &pos) {
-            AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, pv)
+        if actualSize.width != endSize.width || actualSize.height != endSize.height {
+            var correctedPos = axOrigin(snap: snap, size: actualSize, visibleFrame: v, primaryH: primaryH)
+            if let pv = AXValueCreate(.cgPoint, &correctedPos) {
+                AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, pv)
+            }
         }
         return
     }
@@ -120,11 +128,12 @@ private func animateSnap(_ axWindow: AXUIElement,
                           y: currentPos.y + (targetPos.y - currentPos.y) * t)
 
         let item = DispatchWorkItem {
-            if let sv = AXValueCreate(.cgSize, &sz) {
-                AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
-            }
+            // Position first so growth doesn't get clipped by screen bounds mid-animation
             if let pv = AXValueCreate(.cgPoint, &pos) {
                 AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, pv)
+            }
+            if let sv = AXValueCreate(.cgSize, &sz) {
+                AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
             }
         }
         pendingAnimations.append(item)
