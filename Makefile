@@ -12,7 +12,9 @@ DIST_BUNDLE := $(DIST_DIR)/$(APP).app
 INST_BUNDLE := $(INST_DIR)/$(APP).app
 ICON_ICNS   := $(RES_DIR)/$(APP).icns
 
-.PHONY: build dev run publish install open reinstall-open reinstall icon close clean uninstall
+.PHONY: build dev run publish install open reinstall-open reinstall icon close clean uninstall all
+
+all: reinstall-open
 
 # Generate the app icon (.icns) from the drawing code.
 icon: $(ICON_ICNS)
@@ -43,16 +45,14 @@ dev run: build
 	open $(DEV_BUNDLE)
 
 # Build for production. Don't install.
-publish: $(DIST_BUNDLE)
-
-$(DIST_BUNDLE): $(SRC) Info.plist $(ICON_ICNS)
-	@rm -rf $@
-	@mkdir -p $@/Contents/MacOS $@/Contents/Resources
+publish:
+	@rm -rf $(DIST_BUNDLE)
+	@mkdir -p $(DIST_BUNDLE)/Contents/MacOS $(DIST_BUNDLE)/Contents/Resources
 	@echo "→ Building (production)…"
-	swiftc $(SRC) $(FLAGS) -O -o $@/Contents/MacOS/$(APP)
-	@cp Info.plist $@/Contents/Info.plist
-	@cp $(ICON_ICNS) $@/Contents/Resources/$(APP).icns
-	@echo "✓ $@"
+	swiftc $(SRC) $(FLAGS) -O -o $(DIST_BUNDLE)/Contents/MacOS/$(APP)
+	@cp Info.plist $(DIST_BUNDLE)/Contents/Info.plist
+	@cp $(ICON_ICNS) $(DIST_BUNDLE)/Contents/Resources/$(APP).icns
+	@echo "✓ $(DIST_BUNDLE)"
 
 # Build and install into production.
 install: publish

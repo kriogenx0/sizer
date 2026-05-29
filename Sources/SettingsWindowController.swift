@@ -76,10 +76,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private weak var enabledSwitch: ToggleSwitch?
     private weak var axStatusLabel: NSTextField?
     private weak var axOpenBtn: NSButton?
+    private weak var finderCheckbox: NSButton?
+    private weak var finderTextField: NSTextField?
 
     convenience init() {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 548),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 580),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -205,6 +207,35 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         resetBtn.bezelStyle = .rounded
         cv.addSubview(resetBtn)
 
+        let finderLabel = NSTextField(labelWithString: "Finder sidebar:")
+        finderLabel.translatesAutoresizingMaskIntoConstraints = false
+        finderLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        finderLabel.textColor = .secondaryLabelColor
+        cv.addSubview(finderLabel)
+
+        let finderCheck = NSButton(checkboxWithTitle: "Hide if ≥", target: self, action: #selector(finderCheckboxChanged(_:)))
+        finderCheck.translatesAutoresizingMaskIntoConstraints = false
+        finderCheck.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        finderCheck.state = BindingStore.shared.finderSidebarHideEnabled ? .on : .off
+        cv.addSubview(finderCheck)
+        finderCheckbox = finderCheck
+
+        let finderField = NSTextField()
+        finderField.translatesAutoresizingMaskIntoConstraints = false
+        finderField.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        finderField.stringValue = "\(BindingStore.shared.finderSidebarHideThreshold)"
+        finderField.isEnabled = BindingStore.shared.finderSidebarHideEnabled
+        finderField.delegate = self
+        finderField.placeholderString = "5"
+        cv.addSubview(finderField)
+        finderTextField = finderField
+
+        let finderWindowsLabel = NSTextField(labelWithString: "windows")
+        finderWindowsLabel.translatesAutoresizingMaskIntoConstraints = false
+        finderWindowsLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        finderWindowsLabel.textColor = .secondaryLabelColor
+        cv.addSubview(finderWindowsLabel)
+
         let doneBtn = NSButton(title: "Done", target: self, action: #selector(close))
         doneBtn.translatesAutoresizingMaskIntoConstraints = false
         doneBtn.bezelStyle = .rounded
@@ -255,7 +286,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             speedLabel.centerYAnchor.constraint(equalTo: speedControl.centerYAnchor),
 
             speedControl.leadingAnchor.constraint(equalTo: speedLabel.trailingAnchor, constant: 8),
-            speedControl.bottomAnchor.constraint(equalTo: resetBtn.topAnchor, constant: -10),
+            speedControl.bottomAnchor.constraint(equalTo: finderCheck.topAnchor, constant: -8),
+
+            finderLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 16),
+            finderLabel.centerYAnchor.constraint(equalTo: finderCheck.centerYAnchor),
+
+            finderCheck.leadingAnchor.constraint(equalTo: finderLabel.trailingAnchor, constant: 8),
+            finderCheck.bottomAnchor.constraint(equalTo: resetBtn.topAnchor, constant: -10),
+
+            finderField.leadingAnchor.constraint(equalTo: finderCheck.trailingAnchor, constant: 6),
+            finderField.centerYAnchor.constraint(equalTo: finderCheck.centerYAnchor),
+            finderField.widthAnchor.constraint(equalToConstant: 40),
+
+            finderWindowsLabel.leadingAnchor.constraint(equalTo: finderField.trailingAnchor, constant: 4),
+            finderWindowsLabel.centerYAnchor.constraint(equalTo: finderCheck.centerYAnchor),
 
             resetBtn.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 16),
             resetBtn.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -16),
@@ -308,6 +352,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func speedChanged(_ sender: NSSegmentedControl) {
         BindingStore.shared.animationSpeed = AnimationSpeed(rawValue: sender.selectedSegment) ?? .fast
+    }
+
+    private func sidebarThresholdDescription(_ threshold: Int) -> String {
+        threshold == 0 ? "Never hide Finder sidebar" : "Hide Finder sidebar if ≥ \(threshold) windows"
+    }
+
+    @objc private func finderCheckboxChanged(_ sender: NSButton) {
+        BindingStore.shared.finderSidebarHideEnabled = sender.state == .on
+        finderTextField?.isEnabled = sender.state == .on
+    }
+
+    @objc private func finderThresholdChanged(_ sender: NSStepper) {
+        BindingStore.shared.finderSidebarHideThreshold = sender.integerValue
     }
 
     // MARK: Recording
@@ -367,6 +424,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 }
 
 // MARK: - Table data source / delegate
+
+extension SettingsWindowController: NSTextFieldDelegate {
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField, field === finderTextField else { return }
+        let v = max(1, Int(field.stringValue) ?? BindingStore.shared.finderSidebarHideThreshold)
+        BindingStore.shared.finderSidebarHideThreshold = v
+        field.stringValue = "\(v)"
+    }
+}
 
 extension SettingsWindowController: NSTableViewDataSource, NSTableViewDelegate {
 

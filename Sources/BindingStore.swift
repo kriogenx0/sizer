@@ -15,7 +15,7 @@ enum AnimationSpeed: Int {
 struct HotkeyDef {
     let id: UInt32
     let label: String
-    let snap: WindowSnap
+    let snap: WindowSnap?
     let defaultKeyCode: UInt32
     let defaultModifiers: UInt32
 }
@@ -36,6 +36,8 @@ final class BindingStore {
         HotkeyDef(id:  9, label: "Maximize",             snap: .maximize,     defaultKeyCode:  46, defaultModifiers: UInt32(controlKey | optionKey | cmdKey)),
         HotkeyDef(id: 10, label: "Center (75%)",         snap: .center,       defaultKeyCode:   8, defaultModifiers: UInt32(controlKey | optionKey | cmdKey)),
         HotkeyDef(id: 11, label: "Center (50%)",         snap: .center50,     defaultKeyCode:   7, defaultModifiers: UInt32(controlKey | optionKey | cmdKey)),
+        HotkeyDef(id: 12, label: "Auto Arrange",          snap: nil,           defaultKeyCode:   9, defaultModifiers: UInt32(controlKey | optionKey | cmdKey)),
+        HotkeyDef(id: 13, label: "Auto Arrange (2 Rows)", snap: nil,           defaultKeyCode:   1, defaultModifiers: UInt32(controlKey | optionKey | cmdKey)),
     ]
 
     func keyCode(for id: UInt32) -> UInt32 {
@@ -66,5 +68,15 @@ final class BindingStore {
             return AnimationSpeed(rawValue: raw) ?? .fast
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "animationSpeed") }
+    }
+
+    var finderSidebarHideEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "finderSidebarEnabled") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "finderSidebarEnabled") }
+    }
+
+    var finderSidebarHideThreshold: Int {
+        get { UserDefaults.standard.object(forKey: "finderSidebarThreshold") as? Int ?? 5 }
+        set { UserDefaults.standard.set(newValue, forKey: "finderSidebarThreshold") }
     }
 }

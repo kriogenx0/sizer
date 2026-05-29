@@ -199,8 +199,163 @@ func snapFrontWindow(to snap: WindowSnap) {
                 snap: snap, visibleFrame: v, primaryH: ph, currentPos: currentPos)
 }
 
-// MARK: - Carbon hotkey callback (C-compatible global function)
+// MARK: - Auto-arrange all app windows
 
+private func frontAppWindows() -> (windows: [AXUIElement], v: CGRect, ph: CGFloat)? {
+    guard let frontApp = NSWorkspace.shared.frontmostApplication else { return nil }
+    let axApp = AXUIElementCreateApplication(frontApp.processIdentifier)
+
+    var windowsRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+          let rawWindows = windowsRef as? [AXUIElement] else { return nil }
+
+    let windows = rawWindows.filter { win -> Bool in
+        var subroleRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(win, kAXSubroleAttribute as CFString, &subroleRef) == .success,
+              (subroleRef as? String) == "AXStandardWindow" else { return false }
+        var minRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(win, kAXMinimizedAttribute as CFString, &minRef) == .success,
+           (minRef as? Bool) == true { return false }
+        return true
+    }
+    guard !windows.isEmpty else { return nil }
+
+    let fw = frontWindow(for: axApp)
+    var axPosRef: CFTypeRef?
+    if let fw { AXUIElementCopyAttributeValue(fw, kAXPositionAttribute as CFString, &axPosRef) }
+    var frontPos = CGPoint.zero
+    if let r = axPosRef { AXValueGetValue(r as! AXValue, .cgPoint, &frontPos) }
+
+    let screen = NSScreen.screens.first(where: {
+        frontPos.x >= $0.frame.minX && frontPos.x < $0.frame.maxX
+    }) ?? NSScreen.main ?? NSScreen.screens[0]
+
+    return (windows, screen.visibleFrame, primaryScreenHeight())
+}
+
+private func animateArrange(_ windows: [AXUIElement], endSizes: [CGSize], endPositions: [CGPoint]) {
+    pendingAnimations.forEach { $0.cancel() }
+    pendingAnimations.removeAll()
+
+    let duration = windows.count > 4 ? 0.0 : BindingStore.shared.animationSpeed.duration
+
+    if duration == 0 {
+        for (i, win) in windows.enumerated() {
+            var pos = endPositions[i]
+            if let pv = AXValueCreate(.cgPoint, &pos) {
+                AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, pv)
+            }
+            var sz = endSizes[i]
+            if let sv = AXValueCreate(.cgSize, &sz) {
+                AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, sv)
+            }
+        }
+        return
+    }
+
+    let startSizes: [CGSize] = windows.enumerated().map { i, win in
+        var ref: CFTypeRef?
+        AXUIElementCopyAttributeValue(win, kAXSizeAttribute as CFString, &ref)
+        var sz = endSizes[i]
+        if let r = ref { AXValueGetValue(r as! AXValue, .cgSize, &sz) }
+        return sz
+    }
+    let startPositions: [CGPoint] = windows.enumerated().map { i, win in
+        var ref: CFTypeRef?
+        AXUIElementCopyAttributeValue(win, kAXPositionAttribute as CFString, &ref)
+        var pos = endPositions[i]
+        if let r = ref { AXValueGetValue(r as! AXValue, .cgPoint, &pos) }
+        return pos
+    }
+
+    let steps = 8
+    for step in 1...steps {
+        let t        = Double(step) / Double(steps)   // uniform deadline spacing
+        let progress = easeInOut(t)                    // eased interpolation value
+        let item = DispatchWorkItem {
+            for (i, win) in windows.enumerated() {
+                let sp = startPositions[i], ep = endPositions[i]
+                let ss = startSizes[i],     es = endSizes[i]
+                var pos = CGPoint(x: sp.x + (ep.x - sp.x) * progress,
+                                  y: sp.y + (ep.y - sp.y) * progress)
+                var sz  = CGSize(width:  ss.width  + (es.width  - ss.width)  * progress,
+                                 height: ss.height + (es.height - ss.height) * progress)
+                if let pv = AXValueCreate(.cgPoint, &pos) {
+                    AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, pv)
+                }
+                if let sv = AXValueCreate(.cgSize, &sz) {
+                    AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, sv)
+                }
+            }
+        }
+        pendingAnimations.append(item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration * t, execute: item)
+    }
+}
+
+func arrangeFrontAppWindows() {
+    guard let (windows, v, ph) = frontAppWindows() else { return }
+    let n  = windows.count
+    let cw = v.width / CGFloat(n)
+    let endSizes     = (0..<n).map { _ in CGSize(width: cw, height: v.height) }
+    let endPositions = (0..<n).map { i in CGPoint(x: v.minX + CGFloat(i) * cw, y: ph - v.maxY) }
+    hideFinderSidebarsIfNeeded(windowCount: n)
+    animateArrange(windows, endSizes: endSizes, endPositions: endPositions)
+}
+
+func arrangeFrontAppWindowsGrid() {
+    guard let (windows, v, ph) = frontAppWindows() else { return }
+    let n = windows.count
+
+    let endSizes:     [CGSize]
+    let endPositions: [CGPoint]
+
+    if n == 1 {
+        endSizes     = [CGSize(width: v.width, height: v.height)]
+        endPositions = [CGPoint(x: v.minX, y: ph - v.maxY)]
+    } else {
+        let topCount = n / 2
+        let botCount = (n + 1) / 2
+        let rowH     = v.height / 2
+
+        var sizes:     [CGSize]  = []
+        var positions: [CGPoint] = []
+
+        if topCount > 0 {
+            let cw = v.width / CGFloat(topCount)
+            for i in 0..<topCount {
+                sizes.append(CGSize(width: cw, height: rowH))
+                positions.append(CGPoint(x: v.minX + CGFloat(i) * cw, y: ph - v.maxY))
+            }
+        }
+
+        let cw = v.width / CGFloat(botCount)
+        for i in 0..<botCount {
+            sizes.append(CGSize(width: cw, height: rowH))
+            positions.append(CGPoint(x: v.minX + CGFloat(i) * cw, y: ph - (v.minY + rowH)))
+        }
+
+        endSizes     = sizes
+        endPositions = positions
+    }
+
+    hideFinderSidebarsIfNeeded(windowCount: n)
+    animateArrange(windows, endSizes: endSizes, endPositions: endPositions)
+}
+
+private func hideFinderSidebarsIfNeeded(windowCount: Int) {
+    guard BindingStore.shared.finderSidebarHideEnabled else { return }
+    let threshold = BindingStore.shared.finderSidebarHideThreshold
+    guard threshold > 0,
+          windowCount >= threshold,
+          NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder" else { return }
+    let task = Process()
+    task.launchPath = "/usr/bin/osascript"
+    task.arguments = ["-e", "tell application \"Finder\" to set sidebar width of every window to 0"]
+    try? task.run()
+}
+
+// MARK: - Carbon hotkey callback (C-compatible global function)
 func hotkeyCallback(
     _ callRef: EventHandlerCallRef?,
     _ event: EventRef?,
@@ -216,6 +371,20 @@ func hotkeyCallback(
         nil,
         &hkID
     )
+
+    if hkID.id == 12 {
+        DispatchQueue.main.async { AppDelegate.shared?.pulseIcon() }
+        if AXIsProcessTrusted() { arrangeFrontAppWindows() }
+        else { AppDelegate.shared?.checkAccessibility() }
+        return noErr
+    }
+
+    if hkID.id == 13 {
+        DispatchQueue.main.async { AppDelegate.shared?.pulseIcon() }
+        if AXIsProcessTrusted() { arrangeFrontAppWindowsGrid() }
+        else { AppDelegate.shared?.checkAccessibility() }
+        return noErr
+    }
 
     let snap: WindowSnap? = {
         switch hkID.id {
@@ -296,7 +465,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         toggleMenuItem = toggle
         menu.addItem(toggle)
 
-        for group in [[1,2,3,4], [5,6,7,8], [9,10,11]] {
+        for group in [[1,2,3,4], [5,6,7,8], [9,10,11], [12,13]] {
             menu.addItem(.separator())
             for id in group {
                 guard let def = BindingStore.shared.definitions.first(where: { $0.id == UInt32(id) }) else { continue }
@@ -327,7 +496,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func menuSnapAction(_ sender: NSMenuItem) {
         guard let def = BindingStore.shared.definitions.first(where: { $0.id == UInt32(sender.tag) }) else { return }
-        snapFrontWindow(to: def.snap)
+        if let snap = def.snap {
+            snapFrontWindow(to: snap)
+        } else if def.id == 12 {
+            arrangeFrontAppWindows()
+        } else if def.id == 13 {
+            arrangeFrontAppWindowsGrid()
+        }
     }
 
     // MARK: Toggle
