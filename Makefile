@@ -45,7 +45,7 @@ dev run: build
 	open $(DEV_BUNDLE)
 
 # Build for production. Don't install.
-publish: $(ICON_ICNS)
+publish:
 	@rm -rf $(DIST_BUNDLE)
 	@mkdir -p $(DIST_BUNDLE)/Contents/MacOS $(DIST_BUNDLE)/Contents/Resources
 	@echo "→ Building (production)…"
