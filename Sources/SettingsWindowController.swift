@@ -78,10 +78,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private weak var axOpenBtn: NSButton?
     private weak var finderCheckbox: NSButton?
     private weak var finderTextField: NSTextField?
+    private weak var launchAtLoginCheckbox: NSButton?
 
     convenience init() {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 580),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 615),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -236,6 +237,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         finderWindowsLabel.textColor = .secondaryLabelColor
         cv.addSubview(finderWindowsLabel)
 
+        let launchCheck = NSButton(checkboxWithTitle: "Launch at Login",
+                                    target: self, action: #selector(launchAtLoginToggled(_:)))
+        launchCheck.translatesAutoresizingMaskIntoConstraints = false
+        launchCheck.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        launchCheck.state = BindingStore.shared.launchAtLogin ? .on : .off
+        cv.addSubview(launchCheck)
+        launchAtLoginCheckbox = launchCheck
+
         let doneBtn = NSButton(title: "Done", target: self, action: #selector(close))
         doneBtn.translatesAutoresizingMaskIntoConstraints = false
         doneBtn.bezelStyle = .rounded
@@ -292,7 +301,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             finderLabel.centerYAnchor.constraint(equalTo: finderCheck.centerYAnchor),
 
             finderCheck.leadingAnchor.constraint(equalTo: finderLabel.trailingAnchor, constant: 8),
-            finderCheck.bottomAnchor.constraint(equalTo: resetBtn.topAnchor, constant: -10),
+            finderCheck.bottomAnchor.constraint(equalTo: launchCheck.topAnchor, constant: -8),
+
+            launchCheck.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 16),
+            launchCheck.bottomAnchor.constraint(equalTo: resetBtn.topAnchor, constant: -10),
 
             finderField.leadingAnchor.constraint(equalTo: finderCheck.trailingAnchor, constant: 6),
             finderField.centerYAnchor.constraint(equalTo: finderCheck.centerYAnchor),
@@ -324,6 +336,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         refreshAccessibilityStatus()
         enabledSwitch?.isOn = AppDelegate.shared?.isEnabled ?? true
         enabledSwitch?.needsDisplay = true
+        launchAtLoginCheckbox?.state = BindingStore.shared.launchAtLogin ? .on : .off
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -361,6 +374,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     @objc private func finderCheckboxChanged(_ sender: NSButton) {
         BindingStore.shared.finderSidebarHideEnabled = sender.state == .on
         finderTextField?.isEnabled = sender.state == .on
+    }
+
+    @objc private func launchAtLoginToggled(_ sender: NSButton) {
+        AppDelegate.shared?.setLaunchAtLogin(sender.state == .on)
     }
 
     @objc private func finderThresholdChanged(_ sender: NSStepper) {

@@ -1,6 +1,7 @@
 import Cocoa
 import Carbon.HIToolbox
 import ApplicationServices
+import ServiceManagement
 
 // MARK: - Types
 
@@ -449,6 +450,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         buildMenu()
         checkAccessibility()
         registerHotkeys()
+        applyLaunchAtLogin()
     }
 
     // MARK: Menu
@@ -512,6 +514,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else if def.id == 13 {
             arrangeFrontAppWindowsGrid()
         }
+    }
+
+    // MARK: Launch at Login
+
+    func applyLaunchAtLogin() {
+        if #available(macOS 13.0, *) {
+            if BindingStore.shared.launchAtLogin {
+                try? SMAppService.mainApp.register()
+            } else {
+                try? SMAppService.mainApp.unregister()
+            }
+        }
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        BindingStore.shared.launchAtLogin = enabled
+        applyLaunchAtLogin()
     }
 
     // MARK: Toggle

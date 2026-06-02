@@ -79,4 +79,9 @@ final class BindingStore {
         get { UserDefaults.standard.object(forKey: "finderSidebarThreshold") as? Int ?? 5 }
         set { UserDefaults.standard.set(newValue, forKey: "finderSidebarThreshold") }
     }
+
+    var launchAtLogin: Bool {
+        get { UserDefaults.standard.object(forKey: "launchAtLogin") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "launchAtLogin") }
+    }
 }
