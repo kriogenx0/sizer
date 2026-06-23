@@ -82,7 +82,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     convenience init() {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 615),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 667),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false

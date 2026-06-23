@@ -209,6 +209,76 @@ func snapFrontWindow(to snap: WindowSnap) {
                 snap: snap, visibleFrame: v, primaryH: ph, currentPos: currentPos)
 }
 
+// MARK: - Move window to adjacent display
+
+func moveToAdjacentDisplay(goRight: Bool) {
+    guard let frontApp = NSWorkspace.shared.frontmostApplication else { return }
+    let axApp = AXUIElementCreateApplication(frontApp.processIdentifier)
+    guard let axWindow = frontWindow(for: axApp) else { return }
+
+    var axPosRef: CFTypeRef?
+    AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &axPosRef)
+    var currentPos = CGPoint.zero
+    if let ref = axPosRef { AXValueGetValue(ref as! AXValue, .cgPoint, &currentPos) }
+
+    var currentSizeRef: CFTypeRef?
+    AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &currentSizeRef)
+    var currentSize = CGSize(width: 800, height: 600)
+    if let ref = currentSizeRef { AXValueGetValue(ref as! AXValue, .cgSize, &currentSize) }
+
+    let screens = NSScreen.screens.sorted { $0.frame.minX < $1.frame.minX }
+    guard screens.count > 1 else { return }
+
+    let currentScreen = screens.first(where: {
+        currentPos.x >= $0.frame.minX && currentPos.x < $0.frame.maxX
+    }) ?? screens[0]
+
+    guard let currentIndex = screens.firstIndex(of: currentScreen) else { return }
+    let targetIndex = goRight
+        ? (currentIndex + 1) % screens.count
+        : (currentIndex - 1 + screens.count) % screens.count
+    let targetScreen = screens[targetIndex]
+
+    let ph  = primaryScreenHeight()
+    let cv  = currentScreen.visibleFrame
+    let tv  = targetScreen.visibleFrame
+
+    let isMaximized = abs(currentSize.width  - cv.width)  <= 2 &&
+                      abs(currentSize.height - cv.height) <= 2
+
+    let targetSize: CGSize
+    let tvTopAX = ph - tv.maxY
+    let newX: CGFloat
+    let newY: CGFloat
+
+    if isMaximized {
+        targetSize = CGSize(width: tv.width, height: tv.height)
+        newX = tv.minX
+        newY = tvTopAX
+    } else {
+        targetSize = currentSize
+        // Relative position of window top-left within current visible frame (AX y-down coords)
+        let cvTopAX = ph - cv.maxY
+        let relX = (currentPos.x - cv.minX) / cv.width
+        let relY = (currentPos.y - cvTopAX) / cv.height
+        var px = tv.minX + relX * tv.width
+        var py = tvTopAX + relY * tv.height
+        px = max(tv.minX, min(px, tv.maxX - targetSize.width))
+        py = max(tvTopAX, min(py, (ph - tv.minY) - targetSize.height))
+        newX = px
+        newY = py
+    }
+
+    var newPos = CGPoint(x: newX, y: newY)
+    if let pv = AXValueCreate(.cgPoint, &newPos) {
+        AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, pv)
+    }
+    var newSize = targetSize
+    if let sv = AXValueCreate(.cgSize, &newSize) {
+        AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
+    }
+}
+
 // MARK: - Auto-arrange all app windows
 
 private func frontAppWindows() -> (windows: [AXUIElement], v: CGRect, ph: CGFloat)? {
@@ -396,6 +466,20 @@ func hotkeyCallback(
         return noErr
     }
 
+    if hkID.id == 14 {
+        DispatchQueue.main.async { AppDelegate.shared?.pulseIcon() }
+        if AXIsProcessTrusted() { moveToAdjacentDisplay(goRight: true) }
+        else { AppDelegate.shared?.checkAccessibility() }
+        return noErr
+    }
+
+    if hkID.id == 15 {
+        DispatchQueue.main.async { AppDelegate.shared?.pulseIcon() }
+        if AXIsProcessTrusted() { moveToAdjacentDisplay(goRight: false) }
+        else { AppDelegate.shared?.checkAccessibility() }
+        return noErr
+    }
+
     let snap: WindowSnap? = {
         switch hkID.id {
         case 1:  return .left
@@ -476,7 +560,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         toggleMenuItem = toggle
         menu.addItem(toggle)
 
-        for group in [[1,2,3,4], [5,6,7,8], [9,10,11], [12,13]] {
+        for group in [[1,2,3,4], [5,6,7,8], [9,10,11], [12,13], [14,15]] {
             menu.addItem(.separator())
             for id in group {
                 guard let def = BindingStore.shared.definitions.first(where: { $0.id == UInt32(id) }) else { continue }
@@ -513,6 +597,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             arrangeFrontAppWindows()
         } else if def.id == 13 {
             arrangeFrontAppWindowsGrid()
+        } else if def.id == 14 {
+            moveToAdjacentDisplay(goRight: true)
+        } else if def.id == 15 {
+            moveToAdjacentDisplay(goRight: false)
         }
     }
 

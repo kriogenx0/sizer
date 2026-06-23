@@ -38,6 +38,8 @@ final class BindingStore {
         HotkeyDef(id: 11, label: "Center (50%)",         snap: .center50,     defaultKeyCode:   7, defaultModifiers: UInt32(controlKey | optionKey | cmdKey)),
         HotkeyDef(id: 12, label: "Auto Arrange Columns", snap: nil,           defaultKeyCode:   9, defaultModifiers: UInt32(controlKey | optionKey | cmdKey)),
         HotkeyDef(id: 13, label: "Auto Arrange 2 Rows",  snap: nil,           defaultKeyCode:   1, defaultModifiers: UInt32(controlKey | optionKey | cmdKey)),
+        HotkeyDef(id: 14, label: "Next Display",          snap: nil,           defaultKeyCode: 124, defaultModifiers: UInt32(controlKey | optionKey)),
+        HotkeyDef(id: 15, label: "Previous Display",      snap: nil,           defaultKeyCode: 123, defaultModifiers: UInt32(controlKey | optionKey)),
     ]
 
     func keyCode(for id: UInt32) -> UInt32 {
