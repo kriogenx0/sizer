@@ -2,12 +2,13 @@ import Foundation
 import Carbon.HIToolbox
 
 enum AnimationSpeed: Int {
-    case off = 0, fast = 1, slow = 2
+    case off = 0, fast = 1, slow = 2, faster = 3
     var duration: TimeInterval {
         switch self {
-        case .off:  return 0
-        case .fast: return 0.06
-        case .slow: return 0.15
+        case .off:    return 0
+        case .faster: return 0.03
+        case .fast:   return 0.06
+        case .slow:   return 0.15
         }
     }
 }

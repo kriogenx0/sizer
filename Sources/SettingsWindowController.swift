@@ -195,12 +195,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         speedLabel.textColor = .secondaryLabelColor
         cv.addSubview(speedLabel)
 
-        let speedControl = NSSegmentedControl(labels: ["Off", "Fast", "Slow"],
+        let speedOptions: [AnimationSpeed] = [.off, .faster, .fast, .slow]
+        let speedControl = NSSegmentedControl(labels: ["Off", "Faster", "Fast", "Slow"],
                                               trackingMode: .selectOne,
                                               target: self,
                                               action: #selector(speedChanged(_:)))
         speedControl.translatesAutoresizingMaskIntoConstraints = false
-        speedControl.selectedSegment = BindingStore.shared.animationSpeed.rawValue
+        speedControl.selectedSegment = speedOptions.firstIndex(of: BindingStore.shared.animationSpeed) ?? 2
         cv.addSubview(speedControl)
 
         let resetBtn = NSButton(title: "Reset Defaults", target: self, action: #selector(resetDefaults))
@@ -364,7 +365,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func speedChanged(_ sender: NSSegmentedControl) {
-        BindingStore.shared.animationSpeed = AnimationSpeed(rawValue: sender.selectedSegment) ?? .fast
+        let speeds: [AnimationSpeed] = [.off, .faster, .fast, .slow]
+        guard sender.selectedSegment < speeds.count else { return }
+        BindingStore.shared.animationSpeed = speeds[sender.selectedSegment]
     }
 
     private func sidebarThresholdDescription(_ threshold: Int) -> String {
