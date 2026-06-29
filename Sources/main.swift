@@ -564,13 +564,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(.separator())
             for id in group {
                 guard let def = BindingStore.shared.definitions.first(where: { $0.id == UInt32(id) }) else { continue }
-                let shortcut = formatShortcut(
-                    keyCode:   BindingStore.shared.keyCode(for: def.id),
-                    modifiers: BindingStore.shared.modifiers(for: def.id)
-                )
-                let item = NSMenuItem(title: "\(def.label)\t\(shortcut)",
+                let kc   = BindingStore.shared.keyCode(for: def.id)
+                let mods = BindingStore.shared.modifiers(for: def.id)
+                let item = NSMenuItem(title: def.label,
                                       action: #selector(menuSnapAction(_:)),
-                                      keyEquivalent: "")
+                                      keyEquivalent: carbonKeyToMenuEquivalent(kc))
+                item.keyEquivalentModifierMask = carbonModToMenuMask(mods)
                 item.tag = Int(def.id)
                 menu.addItem(item)
             }
@@ -712,6 +711,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func suspendHotkeys() {
         hotKeyRefs.forEach { UnregisterEventHotKey($0) }
         hotKeyRefs.removeAll()
+    }
+
+    private func carbonKeyToMenuEquivalent(_ keyCode: UInt32) -> String {
+        switch keyCode {
+        case 123: return "\u{F702}"  // left arrow
+        case 124: return "\u{F703}"  // right arrow
+        case 125: return "\u{F701}"  // down arrow
+        case 126: return "\u{F700}"  // up arrow
+        default:  return (keyNames[keyCode] ?? "").lowercased()
+        }
+    }
+
+    private func carbonModToMenuMask(_ mods: UInt32) -> NSEvent.ModifierFlags {
+        var mask: NSEvent.ModifierFlags = []
+        if mods & UInt32(controlKey) != 0 { mask.insert(.control) }
+        if mods & UInt32(optionKey)  != 0 { mask.insert(.option) }
+        if mods & UInt32(shiftKey)   != 0 { mask.insert(.shift) }
+        if mods & UInt32(cmdKey)     != 0 { mask.insert(.command) }
+        return mask
     }
 
     func applicationWillTerminate(_ notification: Notification) {
