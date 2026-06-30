@@ -252,6 +252,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         doneBtn.keyEquivalent = "\r"
         cv.addSubview(doneBtn)
 
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        let versionLabel = NSTextField(labelWithString: "v\(version)")
+        versionLabel.translatesAutoresizingMaskIntoConstraints = false
+        versionLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        versionLabel.textColor = .tertiaryLabelColor
+        cv.addSubview(versionLabel)
+
         NSLayoutConstraint.activate([
             iconView.topAnchor.constraint(equalTo: cv.topAnchor, constant: 14),
             iconView.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 16),
@@ -319,6 +326,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
             doneBtn.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -16),
             doneBtn.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -16),
+
+            versionLabel.centerXAnchor.constraint(equalTo: cv.centerXAnchor),
+            versionLabel.centerYAnchor.constraint(equalTo: doneBtn.centerYAnchor),
         ])
 
         refreshAccessibilityStatus()
