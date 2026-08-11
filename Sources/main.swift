@@ -82,6 +82,44 @@ private func easeInOut(_ t: Double) -> Double {
     t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t
 }
 
+/// AX resizes are anchored at the window's top-left corner. When the left or top
+/// edge is doing most of the moving, reposition first and then resize toward the
+/// stationary opposite edge. Right/bottom-edge resizes use the inverse order.
+private func shouldRepositionBeforeResizing(from start: CGRect, to end: CGRect) -> Bool {
+    let edgeMovements = [
+        (amount: abs(end.minX - start.minX), movesFromTopLeft: true),
+        (amount: abs(end.maxX - start.maxX), movesFromTopLeft: false),
+        (amount: abs(end.minY - start.minY), movesFromTopLeft: true),
+        (amount: abs(end.maxY - start.maxY), movesFromTopLeft: false)
+    ]
+
+    return edgeMovements.max(by: { $0.amount < $1.amount })?.movesFromTopLeft ?? false
+}
+
+private func setFrame(_ axWindow: AXUIElement, position: CGPoint, size: CGSize,
+                      resizeFirst: Bool) {
+    var pos = position
+    var sz = size
+    let setPosition = {
+        if let value = AXValueCreate(.cgPoint, &pos) {
+            AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, value)
+        }
+    }
+    let setSize = {
+        if let value = AXValueCreate(.cgSize, &sz) {
+            AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, value)
+        }
+    }
+
+    if resizeFirst {
+        setSize()
+        setPosition()
+    } else {
+        setPosition()
+        setSize()
+    }
+}
+
 /// Animate size and position simultaneously to the snap target.
 /// On the final frame, corrects position if the window clamped to a minimum size.
 private func animateSnap(_ axWindow: AXUIElement,
@@ -92,18 +130,15 @@ private func animateSnap(_ axWindow: AXUIElement,
     pendingAnimations.removeAll()
 
     let duration = BindingStore.shared.animationSpeed.duration
+    let targetPos = axOrigin(snap: snap, size: endSize, visibleFrame: v, primaryH: primaryH)
+    let repositionFirst = shouldRepositionBeforeResizing(
+        from: CGRect(origin: currentPos, size: startSize),
+        to: CGRect(origin: targetPos, size: endSize)
+    )
+    let resizeFirst = !repositionFirst
 
     if duration == 0 {
-        // Position first so the window can grow without hitting the bottom/right screen edge
-        let targetPos = axOrigin(snap: snap, size: endSize, visibleFrame: v, primaryH: primaryH)
-        var pos = targetPos
-        if let pv = AXValueCreate(.cgPoint, &pos) {
-            AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, pv)
-        }
-        var sz = endSize
-        if let sv = AXValueCreate(.cgSize, &sz) {
-            AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
-        }
+        setFrame(axWindow, position: targetPos, size: endSize, resizeFirst: resizeFirst)
         // Correct position if size was clamped to a minimum
         var actualSzRef: CFTypeRef?
         AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &actualSzRef)
@@ -118,24 +153,17 @@ private func animateSnap(_ axWindow: AXUIElement,
         return
     }
 
-    let targetPos = axOrigin(snap: snap, size: endSize, visibleFrame: v, primaryH: primaryH)
     let steps = 12
 
     for i in 1...steps {
         let t  = easeInOut(Double(i) / Double(steps))
-        var sz = CGSize(width:  startSize.width  + (endSize.width  - startSize.width)  * t,
+        let sz = CGSize(width:  startSize.width  + (endSize.width  - startSize.width)  * t,
                         height: startSize.height + (endSize.height - startSize.height) * t)
-        var pos = CGPoint(x: currentPos.x + (targetPos.x - currentPos.x) * t,
+        let pos = CGPoint(x: currentPos.x + (targetPos.x - currentPos.x) * t,
                           y: currentPos.y + (targetPos.y - currentPos.y) * t)
 
         let item = DispatchWorkItem {
-            // Position first so growth doesn't get clipped by screen bounds mid-animation
-            if let pv = AXValueCreate(.cgPoint, &pos) {
-                AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, pv)
-            }
-            if let sv = AXValueCreate(.cgSize, &sz) {
-                AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sv)
-            }
+            setFrame(axWindow, position: pos, size: sz, resizeFirst: resizeFirst)
         }
         pendingAnimations.append(item)
         DispatchQueue.main.asyncAfter(deadline: .now() + duration * t, execute: item)
