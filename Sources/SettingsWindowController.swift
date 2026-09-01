@@ -242,7 +242,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                                     target: self, action: #selector(launchAtLoginToggled(_:)))
         launchCheck.translatesAutoresizingMaskIntoConstraints = false
         launchCheck.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        AppDelegate.shared?.syncLaunchAtLoginState()
         launchCheck.state = BindingStore.shared.launchAtLogin ? .on : .off
+        if #available(macOS 13.0, *) {} else {
+            launchCheck.isEnabled = false
+            launchCheck.toolTip = "Requires macOS 13 or later"
+        }
         cv.addSubview(launchCheck)
         launchAtLoginCheckbox = launchCheck
 
@@ -347,6 +352,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         refreshAccessibilityStatus()
         enabledSwitch?.isOn = AppDelegate.shared?.isEnabled ?? true
         enabledSwitch?.needsDisplay = true
+        AppDelegate.shared?.syncLaunchAtLoginState()
         launchAtLoginCheckbox?.state = BindingStore.shared.launchAtLogin ? .on : .off
     }
 
@@ -391,6 +397,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func launchAtLoginToggled(_ sender: NSButton) {
         AppDelegate.shared?.setLaunchAtLogin(sender.state == .on)
+        sender.state = BindingStore.shared.launchAtLogin ? .on : .off
     }
 
     @objc private func finderThresholdChanged(_ sender: NSStepper) {

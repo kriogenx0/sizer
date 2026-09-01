@@ -84,7 +84,7 @@ final class BindingStore {
     }
 
     var launchAtLogin: Bool {
-        get { UserDefaults.standard.object(forKey: "launchAtLogin") as? Bool ?? true }
+        get { UserDefaults.standard.object(forKey: "launchAtLogin") as? Bool ?? false }
         set { UserDefaults.standard.set(newValue, forKey: "launchAtLogin") }
     }
 }

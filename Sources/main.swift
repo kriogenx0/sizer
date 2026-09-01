@@ -562,7 +562,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         buildMenu()
         checkAccessibility()
         registerHotkeys()
-        applyLaunchAtLogin()
+        syncLaunchAtLoginState()
     }
 
     // MARK: Menu
@@ -633,19 +633,52 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Launch at Login
 
-    func applyLaunchAtLogin() {
+    /// True when the app is currently enrolled as a login item, or waiting for the
+    /// user to approve it in System Settings.
+    var loginItemEnabled: Bool {
         if #available(macOS 13.0, *) {
-            if BindingStore.shared.launchAtLogin {
-                try? SMAppService.mainApp.register()
-            } else {
-                try? SMAppService.mainApp.unregister()
+            switch SMAppService.mainApp.status {
+            case .enabled, .requiresApproval: return true
+            default:                          return false
             }
+        }
+        return false
+    }
+
+    /// Reconcile the stored preference with the real login-item status. Called on
+    /// launch and whenever Settings regains focus so an external change (e.g. the
+    /// user toggling Sizer in System Settings → Login Items) wins — we never
+    /// silently re-register behind their back.
+    func syncLaunchAtLoginState() {
+        guard #available(macOS 13.0, *) else { return }
+        let enabled = loginItemEnabled
+        if BindingStore.shared.launchAtLogin != enabled {
+            BindingStore.shared.launchAtLogin = enabled
         }
     }
 
+    /// Explicit user action from Settings: register or unregister as needed and
+    /// persist whatever state actually resulted.
     func setLaunchAtLogin(_ enabled: Bool) {
-        BindingStore.shared.launchAtLogin = enabled
-        applyLaunchAtLogin()
+        guard #available(macOS 13.0, *) else {
+            BindingStore.shared.launchAtLogin = enabled
+            return
+        }
+        do {
+            let status = SMAppService.mainApp.status
+            if enabled {
+                if status == .notRegistered { try SMAppService.mainApp.register() }
+            } else {
+                if status != .notRegistered { try SMAppService.mainApp.unregister() }
+            }
+            BindingStore.shared.launchAtLogin = enabled
+        } catch {
+            NSLog("Sizer: launch-at-login \(enabled ? "register" : "unregister") failed: \(error)")
+            BindingStore.shared.launchAtLogin = loginItemEnabled
+        }
+        if enabled && SMAppService.mainApp.status == .requiresApproval {
+            SMAppService.openSystemSettingsLoginItems()
+        }
     }
 
     // MARK: Toggle
