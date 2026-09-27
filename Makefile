@@ -1,6 +1,6 @@
 APP      := Sizer
 SRC      := $(wildcard Sources/*.swift)
-FLAGS    := -framework Cocoa -framework Carbon -framework ApplicationServices -framework ServiceManagement
+FLAGS    := -framework Cocoa -framework SwiftUI -framework Carbon -framework ApplicationServices -framework ServiceManagement
 
 BUILD_DIR := build
 DIST_DIR  := dist

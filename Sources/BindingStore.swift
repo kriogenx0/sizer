@@ -1,7 +1,7 @@
 import Foundation
 import Carbon.HIToolbox
 
-enum AnimationSpeed: Int {
+enum AnimationSpeed: Int, Hashable {
     case off = 0, fast = 1, slow = 2, faster = 3
     var duration: TimeInterval {
         switch self {
