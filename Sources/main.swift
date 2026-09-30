@@ -718,11 +718,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Accessibility
 
-    func checkAccessibility() {
-        let opts = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary
-        guard !AXIsProcessTrustedWithOptions(opts) else { return }
+    private var accessibilityAlertPending = false
+    private var lastAccessibilityDismissal: Date?
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+    func checkAccessibility() {
+        guard !AXIsProcessTrusted() else { return }
+
+        // One alert at a time, and don't nag right after "Later" — otherwise every
+        // hotkey press (including ones made in System Settings) stacks another alert.
+        if accessibilityAlertPending { return }
+        if let last = lastAccessibilityDismissal, Date().timeIntervalSince(last) < 60 { return }
+        accessibilityAlertPending = true
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            defer {
+                self.accessibilityAlertPending = false
+                self.lastAccessibilityDismissal = Date()
+            }
+            guard !AXIsProcessTrusted() else { return }
             let alert = NSAlert()
             alert.messageText = "Accessibility Permission Required"
             alert.informativeText = """

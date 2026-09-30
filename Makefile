@@ -12,7 +12,7 @@ DIST_BUNDLE := $(DIST_DIR)/$(APP).app
 INST_BUNDLE := $(INST_DIR)/$(APP).app
 ICON_ICNS   := $(RES_DIR)/$(APP).icns
 
-.PHONY: dev build open close install uninstall reinstall icon clean all
+.PHONY: dev build open close install uninstall reinstall icon clean all test bump
 
 all: open
 
@@ -82,3 +82,31 @@ reinstall: uninstall install
 clean:
 	rm -rf $(BUILD_DIR) $(DIST_DIR) $(RES_DIR)
 	@echo "✓ Cleaned"
+
+# Check that the sources compile.
+test:
+	@echo "→ Type-checking…"
+	@swiftc -typecheck $(SRC)
+	@echo "✓ Tests passed"
+
+# Bump the patch version, commit (along with any pending changes), tag, and push.
+#   make bump                    1.4 -> 1.4.1 -> 1.4.2
+#   make bump MSG="Fix sizing"   custom commit message
+PLIST_BUDDY := /usr/libexec/PlistBuddy
+bump:
+	@set -e; \
+	if [ -n "$$(git status --porcelain)" ]; then $(MAKE) --no-print-directory test; fi; \
+	cur=$$($(PLIST_BUDDY) -c "Print :CFBundleShortVersionString" Info.plist); \
+	maj=$$(echo "$$cur" | cut -d. -f1); \
+	min=$$(echo "$$cur" | cut -d. -f2); \
+	pat=$$(echo "$$cur" | cut -d. -f3); \
+	new="$$maj.$${min:-0}.$$(( $${pat:-0} + 1 ))"; \
+	if git rev-parse -q --verify "refs/tags/$$new" >/dev/null; then echo "Tag $$new already exists"; exit 1; fi; \
+	echo "→ $$cur -> $$new"; \
+	$(PLIST_BUDDY) -c "Set :CFBundleShortVersionString $$new" Info.plist; \
+	git add -A; \
+	msg="$(MSG)"; [ -n "$$msg" ] || msg="Bump version to $$new"; \
+	git commit -m "$$msg"; \
+	git tag "$$new"; \
+	git push origin HEAD "$$new"; \
+	echo "✓ Released $$new"
