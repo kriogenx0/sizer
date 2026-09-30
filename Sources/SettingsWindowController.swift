@@ -341,7 +341,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private func refreshAccessibilityStatus() {
         let trusted = AXIsProcessTrusted()
-        axStatusLabel?.stringValue = trusted ? "✓ Accessibility granted" : "⚠ Accessibility not granted — remove and re-add Sizer in Settings"
+        axStatusLabel?.stringValue = trusted ? "✓ Accessibility granted" : "⚠ Accessibility not granted — click Open Settings to reset and re-add Sizer"
         axStatusLabel?.textColor   = trusted ? .systemGreen : .systemOrange
         axOpenBtn?.isHidden        = trusted
     }
@@ -368,9 +368,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func openAccessibilitySettings() {
-        NSWorkspace.shared.open(
-            URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-        )
+        AppDelegate.shared?.resetAndOpenAccessibilitySettings()
     }
 
     @objc private func resetDefaults() {

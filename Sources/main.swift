@@ -750,11 +750,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle: "Later")
             NSApp.activate(ignoringOtherApps: true)
             if alert.runModal() == .alertFirstButtonReturn {
-                NSWorkspace.shared.open(
-                    URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-                )
+                self.resetAndOpenAccessibilitySettings()
             }
         }
+    }
+
+    /// Drops any stale Accessibility entry for this app (e.g. from a previous build with a
+    /// different code signature, which shows as enabled but is never trusted), re-registers
+    /// the app so it appears fresh in the list, then opens System Settings.
+    func resetAndOpenAccessibilitySettings() {
+        let reset = Process()
+        reset.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        reset.arguments = ["reset", "Accessibility", Bundle.main.bundleIdentifier ?? "com.sizer.app"]
+        try? reset.run()
+        reset.waitUntilExit()
+
+        let opts = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(opts)
+
+        NSWorkspace.shared.open(
+            URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+        )
     }
 
     // MARK: Hotkeys
